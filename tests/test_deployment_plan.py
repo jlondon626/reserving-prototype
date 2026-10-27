@@ -41,6 +41,7 @@ class ChangeSelectionTests(unittest.TestCase):
             ({"main.py"}, (False, True)),
             ({"requirements.txt", "scripts/deploy-api.ps1"}, (False, True)),
             ({"infrastructure/modules/app-service.bicep"}, (True, True)),
+            ({"infrastructure/modules/sql.bicep"}, (True, True)),
             ({"infrastructure/parameters/dev.bicepparam"}, (True, True)),
             ({"infrastructure/bicepconfig.json", "main.py"}, (True, True)),
             ({".github/workflows/ci-deploy.yml"}, (True, True)),
@@ -81,6 +82,12 @@ class ChangeSelectionTests(unittest.TestCase):
             git.side_effect = [Mock(returncode=0), Mock(returncode=1)]
             self.assertIsNone(planner.changed_paths(BASE, HEAD))
             self.assertEqual(git.call_count, 2)
+
+    def test_sql_only_changes_select_infrastructure_and_api(self):
+        self.assertEqual(
+            planner.classify_changes({"infrastructure/modules/sql.bicep", "infrastructure/parameters/dev.bicepparam"}),
+            (True, True),
+        )
 
     def test_git_errors_fail_instead_of_assuming_no_changes(self):
         with patch.object(planner, "git_command", return_value=Mock(returncode=128)):

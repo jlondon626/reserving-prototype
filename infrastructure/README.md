@@ -2,7 +2,8 @@
 
 Bicep infrastructure for the reserving prototype. The entry point targets an
 existing resource group and provisions a dedicated Linux App Service plan and
-Python web app. The other service modules and their calls remain placeholders.
+Python web app. Development parameters also enable an Azure SQL logical server
+and database. The remaining service modules and their calls are placeholders.
 Application code deployment is a separate step.
 
 ## Structure
@@ -25,7 +26,7 @@ infrastructure/
 
 - `main.bicep` owns shared naming, location, tags and module wiring.
 - `parameters/` supplies environment-specific settings to the same entry point.
-- `modules/` groups related resources by service. App Service is implemented;
+- `modules/` groups related resources by service. App Service and SQL are implemented;
   the other stubs document their intended resources, inputs and outputs.
 - `bicepconfig.json` enables the standard Bicep linter.
 
@@ -73,25 +74,70 @@ so Oryx can install dependencies. The default startup command runs Uvicorn on
 port 8000, listening on all container interfaces. Change
 `appServiceStartupCommand` if the application's module or callable changes.
 
-When the monitoring and database modules are implemented, pass their outputs in
-`additionalAppSettings` inside the app module call, for example:
-
-```bicep
-additionalAppSettings: union(appServiceAppSettings, {
-  APPLICATIONINSIGHTS_CONNECTION_STRING: monitoring.outputs.connectionString
-  SQL_SERVER: sql.outputs.serverFqdn
-  SQL_DATABASE: sql.outputs.databaseName
-})
-```
-
-The output names in this example still need implementing in those modules.
-Monitoring requires instrumentation in addition to its connection string.
-Database connectivity requires suitable network access, an identity-aware driver
-and separate database permissions for the web app's identity.
+The API does not consume SQL settings yet. A later change can pass the SQL
+module's `serverFqdn` and `databaseName` outputs into application settings
+when SQL is enabled. Connectivity also requires suitable network access, an
+identity-aware driver, and separate database permissions for the web app's
+identity. The monitoring module remains a placeholder and will need
+instrumentation in addition to a connection string.
 
 The entry point returns `appServiceName`, `appServiceUrl`, `appServiceResourceId`
 and `appServicePrincipalId` for downstream configuration. Pass `appServiceName`
 to the API deployment script to target the app created or updated by Bicep.
+
+## Azure SQL
+
+`modules/sql.bicep` defines a logical server, one database, and its short-term
+backup retention policy. The database references its parent server, so Bicep
+orders their deployment automatically. Server naming uses the shared prefix and
+a deterministic suffix derived from the resource group; the database defaults
+to `<appName>-<environmentName>`.
+
+SQL is opt-in through these entry-point parameters:
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `sqlEnabled` | `false` | Provision the SQL module for this environment. |
+| `sqlAdministratorLogin` | Empty | Friendly name of the Microsoft Entra SQL administrator; required when SQL is enabled. |
+| `sqlAdministratorObjectId` | Empty | That administrator's tenant-specific Entra object ID; required when SQL is enabled. |
+| `sqlAdministratorPrincipalType` | `User` | Whether the administrator is a `User` or `Group`. |
+| `sqlDatabaseName` | `<appName>-<environmentName>` | Database name within the logical server. |
+
+`dev.bicepparam` enables SQL with the Entra user selected during setup as the
+administrator.
+The administrator name and object ID identify that user; they are not passwords.
+The server enables Entra-only authentication and TLS 1.2 minimum. The GitHub
+deployment identity can provision the resources through Azure RBAC, but is not
+automatically a SQL database user or administrator.
+
+The database is configured for the development free offer:
+
+- General Purpose serverless Gen5, with a maximum capacity of 2 vCores.
+- Maximum data size of 32 GiB, local backup redundancy, and seven-day
+  point-in-time restore retention.
+- `useFreeLimit=true` and `freeLimitExhaustionBehavior=AutoPause`, so it pauses
+  when the monthly free allowance is exhausted rather than enabling overage billing.
+- Platform defaults for minimum capacity and idle auto-pause, without overriding
+  the free offer's idle policy.
+
+Review eligibility and current limits in [Microsoft's free-tier guide](https://learn.microsoft.com/en-us/azure/azure-sql/database/free-tier).
+This is a development configuration. SQL remains disabled in
+`prod.bicepparam` until its authentication and capacity design is chosen.
+
+This first step creates SQL infrastructure only. Public network access is
+disabled, and there are no firewall rules or private endpoints. Neither a
+developer's computer nor the App Service can connect yet. Network access,
+database users for the app identity, an application driver, tables, and schema
+migrations belong to the next integration step.
+
+The main entry point exposes `sqlServerName`, `sqlServerResourceId`,
+`sqlServerFqdn`, `sqlDatabaseName`, and `sqlDatabaseResourceId`. They are empty
+strings when SQL is disabled. The module returns its database name as
+`databaseName`.
+
+Setting `sqlEnabled=false` does not delete SQL resources that already exist.
+The deployment uses incremental mode; retiring a database remains a separate,
+explicit operation.
 
 ## Implementing a service
 
@@ -132,6 +178,18 @@ az bicep build-params --file infrastructure/parameters/prod.bicepparam --stdout
 Check module files individually with `bicep build` while their calls in
 `main.bicep` are still commented out.
 
+`tests/test_sql_infrastructure.py` uses the real Bicep compiler to inspect the
+generated SQL resource definitions, parent dependencies, authentication,
+network boundary, free-offer policy, backup retention, outputs, and development
+versus production configuration. These are compiled infrastructure contract
+tests: no Azure login, deployment, or SQL connection is required. Install Azure
+CLI and Bicep before running the Python suite described in
+[the project README](../README.md#run-checks).
+
+Compilation and contract tests do not prove Azure provider acceptance or SQL
+connectivity. Use `what-if` to check the planned deployment against Azure;
+connection checks will follow when database access is implemented.
+
 ## Preview and deploy
 
 Install Azure CLI, sign in with `az login` and
@@ -151,9 +209,11 @@ $resourceGroupName = 'rg-reserving-dev'
 az deployment group what-if --resource-group $resourceGroupName --parameters infrastructure/parameters/dev.bicepparam
 ```
 
-`what-if` only previews changes; it does not create the App Service. Review the
+`what-if` only previews changes; it does not create resources. Review the
 preview before running the deployment command. This creates or updates the B1
-plan and web app; the plan incurs Azure charges while it exists:
+plan, web app, and SQL resources enabled in the development parameters. The plan
+incurs Azure charges while it exists; the SQL free offer is configured to pause
+at its free limit:
 
 ```powershell
 $appName = az deployment group create --resource-group $resourceGroupName --parameters infrastructure/parameters/dev.bicepparam --query properties.outputs.appServiceName.value --output tsv
@@ -182,7 +242,8 @@ returned deployment status before reporting success.
 ## GitHub deployment
 
 [The GitHub Actions workflow](../.github/workflows/ci-deploy.yml) compiles Bicep
-and both environment parameter files during validation. Deployment targets
+and both environment parameter files before running the Python tests, including
+the SQL infrastructure contracts. Deployment targets
 development only, using `dev.bicepparam` and a named infrastructure deployment
 that defaults to `reserving-dev-infrastructure`.
 
@@ -198,6 +259,11 @@ Azure permissions, and change-selection rules. The deployment identity needs
 permission to update the resources defined here; if future modules create role
 assignments, review its permissions as part of that change.
 
+SQL module and development SQL parameter changes are infrastructure inputs, so
+the existing planner deploys Bicep before publishing the API. No new SQL-specific
+deployment script is needed. SQL connection checks are not part of the API
+health endpoint at this stage.
+
 Use `prod.bicepparam` with the intended production resource group for production.
 If resource group creation becomes part of this repository, add a
 subscription-scoped wrapper that creates the group and calls `main.bicep`.
@@ -209,4 +275,6 @@ References: [Bicep modules](https://learn.microsoft.com/en-us/azure/azure-resour
 [ZIP deployment](https://learn.microsoft.com/en-us/azure/app-service/deploy-zip),
 [run-from-package limitations](https://learn.microsoft.com/en-us/azure/app-service/deploy-run-package),
 [Oryx build settings](https://github.com/microsoft/Oryx/blob/main/doc/hosts/appservice.md),
+[SQL server resource reference](https://learn.microsoft.com/en-us/azure/templates/microsoft.sql/2025-01-01/servers),
+[SQL database resource reference](https://learn.microsoft.com/en-us/azure/templates/microsoft.sql/2025-01-01/servers/databases),
 [tool installation](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/install).

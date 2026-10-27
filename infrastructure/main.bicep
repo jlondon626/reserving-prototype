@@ -28,6 +28,25 @@ param appServiceBuildDuringDeployment bool = true
 @secure()
 param appServiceAppSettings object = {}
 
+@description('Provision the development Azure SQL free-offer server and database. Configure an Entra administrator when enabled.')
+param sqlEnabled bool = false
+
+@description('Display name of the Microsoft Entra SQL administrator. Required when SQL is enabled.')
+param sqlAdministratorLogin string = ''
+
+@description('Tenant-local object ID of the Microsoft Entra SQL administrator. Required when SQL is enabled; this is not a client/application ID.')
+param sqlAdministratorObjectId string = ''
+
+@description('Type of the Microsoft Entra SQL administrator.')
+@allowed([
+  'User'
+  'Group'
+])
+param sqlAdministratorPrincipalType string = 'User'
+
+@description('Name of the application SQL database within the logical server.')
+param sqlDatabaseName string = '${appName}-${environmentName}'
+
 // Each service module will adapt this prefix to its resource naming requirements.
 var namePrefix = '${appName}-${environmentName}'
 var commonTags = union(tags, {
@@ -61,14 +80,18 @@ module appService './modules/app-service.bicep' = {
   }
 }
 
-// module sql './modules/sql.bicep' = {
-//   name: '${deployment().name}-sql'
-//   params: {
-//     namePrefix: namePrefix
-//     location: location
-//     tags: commonTags
-//   }
-// }
+module sql './modules/sql.bicep' = if (sqlEnabled) {
+  name: '${deployment().name}-sql'
+  params: {
+    namePrefix: namePrefix
+    location: location
+    tags: commonTags
+    administratorLogin: sqlAdministratorLogin
+    administratorObjectId: sqlAdministratorObjectId
+    administratorPrincipalType: sqlAdministratorPrincipalType
+    databaseName: sqlDatabaseName
+  }
+}
 
 // module cosmosDb './modules/cosmos-db.bicep' = {
 //   name: '${deployment().name}-cosmos-db'
@@ -106,3 +129,18 @@ output appServiceResourceId string = appService.outputs.appResourceId
 
 @description('Managed identity principal ID for downstream access grants.')
 output appServicePrincipalId string = appService.outputs.principalId
+
+@description('Logical SQL server name, or empty when SQL is disabled.')
+output sqlServerName string = sqlEnabled ? sql!.outputs.serverName : ''
+
+@description('Logical SQL server resource ID, or empty when SQL is disabled.')
+output sqlServerResourceId string = sqlEnabled ? sql!.outputs.serverResourceId : ''
+
+@description('SQL server hostname without credentials, or empty when SQL is disabled.')
+output sqlServerFqdn string = sqlEnabled ? sql!.outputs.serverFqdn : ''
+
+@description('Application SQL database name, or empty when SQL is disabled.')
+output sqlDatabaseName string = sqlEnabled ? sql!.outputs.databaseName : ''
+
+@description('Application SQL database resource ID, or empty when SQL is disabled.')
+output sqlDatabaseResourceId string = sqlEnabled ? sql!.outputs.databaseResourceId : ''

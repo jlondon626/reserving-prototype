@@ -9,9 +9,9 @@ Create the GitHub repository with the **contents of `reserving-prototype` at its
 root**. GitHub must find `.github/workflows/ci-deploy.yml` at the repository root,
 alongside `main.py`, `requirements.txt`, `scripts/`, and `infrastructure/`.
 
-The current local folder is inside a parent Git repository for another project.
-Publish this project separately; adding a nested project folder to that parent
-repository would not put this workflow in GitHub's workflow directory.
+The repository layout must keep `.github/` at its root; nesting the project
+inside another repository directory would not put this workflow in GitHub's
+workflow directory.
 
 ## Configure Azure authentication
 
@@ -90,6 +90,18 @@ current, or manually run the latest `main` revision.
 After changing GitHub environment variables or making Azure changes outside this
 workflow, manually run with `deploy_all` enabled. Those changes do not appear in
 the repository's file diff.
+
+Bicep is installed and compiled before the Python suite runs. In addition to
+API and planner tests, `tests/test_sql_infrastructure.py` checks compiled SQL
+resource contracts and the development/production parameter choices. This
+validation needs no Azure login and does not create or query a database.
+
+Development SQL is enabled in `dev.bicepparam`; SQL stays disabled in production
+parameters. The SQL module uses your selected Entra administrator, not the
+GitHub deployment identity, for database administration. Public SQL access is
+disabled in this first infrastructure step, and application database access is
+not configured. See [the SQL module guide](../infrastructure/README.md#azure-sql)
+for the free-offer policy, network boundary, and outputs.
 
 After Azure deployment, the workflow checks the API's health and greeting
 endpoints. Startup and build settings come from Bicep; `deploy-api.ps1` publishes

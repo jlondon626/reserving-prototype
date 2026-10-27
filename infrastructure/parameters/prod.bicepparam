@@ -7,5 +7,8 @@ param environmentName = 'prod'
 param appServiceSkuName = 'B1'
 param appServicePythonVersion = '3.12'
 
+// Choose a production administrator, capacity and network design before enabling SQL.
+param sqlEnabled = false
+
 // Add production-specific app settings as the API grows.
 // Omit location to use the target resource group's location.

@@ -2,6 +2,8 @@
 
 A small FastAPI service hosted on Azure App Service. The API currently exposes
 simple GET endpoints so you can verify local development and cloud deployment.
+The development Bicep parameters also enable an Azure SQL logical server and
+database. The API does not connect to SQL yet.
 
 ## Run locally
 
@@ -48,13 +50,19 @@ return HTTP `422` with validation details.
 
 ## Run checks
 
-Install the development dependencies and run the API and deployment-planning
-tests from the repository root:
+Install Azure CLI and its Bicep CLI, then install the development dependencies
+and run the checks from the repository root:
 
 ```powershell
+az bicep install --version v0.48.1
 uv pip install --python .venv/Scripts/python.exe -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
+
+The suite covers API responses, deployment selection, and compiled SQL
+infrastructure contracts. The SQL tests compile Bicep and inspect its generated
+ARM template and environment parameters; they do not deploy Azure resources or
+connect to a database. Local compilation does not require `az login`.
 
 The Bicep compilation commands are in [the infrastructure guide](infrastructure/README.md#check-locally).
 
@@ -69,15 +77,17 @@ If the development resource group does not exist, create it:
 az group create --name rg-reserving-dev --location uksouth
 ```
 
-Preview the App Service infrastructure:
+Preview the App Service and development SQL infrastructure:
 
 ```powershell
 az deployment group what-if --resource-group rg-reserving-dev --parameters infrastructure/parameters/dev.bicepparam
 ```
 
 `what-if` only previews changes. The `create` command provisions the Linux B1
-plan and Python web app; the plan incurs Azure charges while it exists. The
-resource group's location determines the resources' region.
+plan, Python web app, and the SQL resources enabled in `dev.bicepparam`. The App
+Service plan incurs Azure charges while it exists. SQL uses the development
+free offer and pauses when its monthly free allowance is exhausted. The resource
+group's location determines the resources' region.
 
 Create or update the infrastructure and deploy the API in one line:
 
@@ -117,6 +127,29 @@ the target explicitly:
 To test the cloud app in Postman, replace `baseUrl` with the HTTPS URL printed by
 the script, then send the same GET request to `{{baseUrl}}/hello?name=Jane`.
 Open that base URL followed by `/docs` in a browser for interactive documentation.
+
+## Development SQL database
+
+`dev.bicepparam` enables SQL and identifies the Microsoft Entra user selected
+during setup as the initial SQL administrator. The server uses Entra-only
+authentication, so no SQL administrator password is stored in the repository.
+The database name is `reserving-dev`; its logical server has a deterministic,
+globally unique suffix.
+
+The database uses the Azure SQL free offer: General Purpose serverless Gen5,
+up to 2 vCores, 32 GiB maximum data storage, local backup redundancy, and
+seven-day point-in-time restore retention. `useFreeLimit=true` and
+`freeLimitExhaustionBehavior=AutoPause` pause the database at the monthly free
+limit instead of enabling overage billing. Eligibility and limits are described
+in [Microsoft's free-tier guide](https://learn.microsoft.com/en-us/azure/azure-sql/database/free-tier).
+
+This first step creates infrastructure only. Public SQL network access is
+disabled, and no private endpoint, firewall exceptions, application database
+permissions, tables, or migrations are configured. Connecting the API or your
+computer requires a later networking and database-access change.
+
+SQL stays disabled in `prod.bicepparam` until production authentication and
+capacity settings are chosen. See [the SQL module guide](infrastructure/README.md#azure-sql) for parameters and outputs.
 
 ## GitHub Actions
 
